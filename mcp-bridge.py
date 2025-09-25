@@ -65,41 +65,47 @@ class MCPHTTPBridge:
         return {
             "tools": [
                 {
-                    "name": "get_user_data",
-                    "description": "Get user profile and account information",
+                    "name": "get_ships",
+                    "description": "List company's ships and related info",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "user_id": {"type": "string", "description": "User ID"},
                             "token": {"type": "string", "description": "User auth token (optional)"}
                         },
-                        "required": ["user_id"]
                     }
                 },
                 {
-                    "name": "get_user_orders",
-                    "description": "Get user's recent orders",
+                    "name": "get_ship_emissions",
+                    "description": "Get ship emissions data for a specific vessel with optional time period filtering. Defaults to year-to-date if no time period specified.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "user_id": {"type": "string", "description": "User ID"},
-                            "limit": {"type": "number", "description": "Number of orders", "default": 10},
-                            "token": {"type": "string", "description": "User auth token (optional)"}
+                            "asset_id": {
+                                "type": "string",
+                                "description": "Ship/vessel asset ID (required)"
+                            },
+                            "ship_id": {
+                                "type": "string", 
+                                "description": "Alternative name for asset_id (required if asset_id not provided)"
+                            },
+                            "start": {
+                                "type": "string",
+                                "description": "Start date in ISO format (YYYY-MM-DDTHH:MM:SSZ). Optional - defaults to beginning of current year.",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z?$",
+                                "examples": ["2024-01-01T00:00:00Z", "2024-06-15T12:00:00Z"]
+                            },
+                            "end": {
+                                "type": "string",
+                                "description": "End date in ISO format (YYYY-MM-DDTHH:MM:SSZ). Optional - defaults to current time.",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z?$",
+                                "examples": ["2024-12-31T23:59:59Z", "2024-06-30T23:59:59Z"]
+                            }
                         },
-                        "required": ["user_id"]
-                    }
-                },
-                {
-                    "name": "update_user_settings",
-                    "description": "Update user preferences and settings",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "user_id": {"type": "string", "description": "User ID"},
-                            "settings": {"type": "object", "description": "Settings to update"},
-                            "token": {"type": "string", "description": "User auth token (optional)"}
-                        },
-                        "required": ["user_id", "settings"]
+                        "required": ["asset_id"],
+                        "oneOf": [
+                            {"required": ["asset_id"]},
+                            {"required": ["ship_id"]}
+                        ]
                     }
                 },
                 {
