@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import os
 import json
 from typing import Dict, Any, List, Optional
@@ -54,14 +55,6 @@ class AuthConfig:
         if missing_tokens:
             raise ValueError(f"Missing required environment variables: {', '.join(missing_tokens)}")
     
-    def get_api_token(self, environment: str = "prod") -> str:
-        """Get API token for specific environment"""
-        token_map = {
-            "prod": self.prod_api_token or self.api_service_token,
-            "staging": self.staging_api_token or self.api_service_token,
-            "dev": self.dev_api_token or self.api_service_token
-        }
-        return token_map.get(environment, self.api_service_token)
 
 class MCPServer:
     def __init__(self):
@@ -79,11 +72,11 @@ class MCPServer:
         headers = {"Content-Type": "application/json"}
         
         # Use service token for server-to-server requests
-        headers["Authorization"] = f"Bearer {self.auth_config.dch_api_token}"
-        
+        headers["authorization"] = f"{self.auth_config.dch_api_token}"
+    
         # Add service identification header
-        headers["X-MCP-Service"] = "claude-mcp-server"
-        headers["X-MCP-Version"] = "1.0.0"
+        #headers["X-MCP-Service"] = "claude-mcp-server"
+        #headers["X-MCP-Version"] = "1.0.0"
         return headers
     
     def _get_platform_api_headers(self, use_service_token: bool = True) -> Dict[str, str]:
@@ -91,7 +84,7 @@ class MCPServer:
         headers = {"Content-Type": "application/json"}
         
         # Use service token for server-to-server requests
-        headers["Authorization"] = f"Bearer {self.auth_config.platform_api_token}"
+        headers["Authorization"] = f"{self.auth_config.platform_api_token}"
         
         # Add service identification header
         headers["X-MCP-Service"] = "claude-mcp-server"
@@ -152,120 +145,107 @@ class MCPServer:
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Handle tool calls with proper authentication"""
         try:
-            if tool_name == "get_user_data":
-                return await self._get_user_data(arguments)
-            elif tool_name == "get_user_orders":
-                return await self._get_user_orders(arguments)
-            elif tool_name == "update_user_settings":
-                return await self._update_user_settings(arguments)
-            elif tool_name == "call_lambda_api":
-                return await self._call_lambda_api(arguments)
-            elif tool_name == "search_users":
-                return await self._search_users(arguments)
+            if tool_name == "get_ships":
+                return await self._get_ships(arguments)
+            elif tool_name == "get_ship_emissions":
+                return await self._get_ship_emissions(arguments)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
             logger.error(f"Error in tool call {tool_name}: {e}")
             return {"error": str(e)}
-    
-    async def _get_user_data(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Get user data from main API"""
-        user_id = args.get("user_id")
-        user_token = args.get("token")  # Optional user token
         
-        if not user_id:
-            return {"error": "user_id is required"}
-        
-        url = f"{self.api_base_url}/users/{user_id}"
-        headers = self._get_api_headers(user_token=user_token)
-        
+    async def _get_ships(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get ships from DCH API"""
+        url = f"{self.dch_api_url}/assets?include_internal=true"
+        headers = self._get_dch_api_headers()
+        logger.info(f"Fetching ships from {url}")
         result = await self._make_api_request("GET", url, headers)
-        
-        if "error" in result:
-            return {"content": [{"type": "text", "text": json.dumps(result)}]}
-        
         return {"content": [{"type": "text", "text": json.dumps(result)}]}
-    
-    async def _get_user_orders(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Get user orders"""
-        user_id = args.get("user_id")
-        user_token = args.get("token")
-        limit = args.get("limit", 10)
+
+    async def _get_ship_emissions(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get ship emissions from DCH API with time period filtering"""
         
-        if not user_id:
-            return {"error": "user_id is required"}
+        # Validate required argument
+        ship_id = args.get("asset_id") or args.get("ship_id")
+        if not ship_id:
+            return {"error": "Missing asset_id or ship_id argument"}
         
-        url = f"{self.api_base_url}/users/{user_id}/orders"
-        headers = self._get_api_headers(user_token=user_token)
-        params = {"limit": limit}
+        # Handle time period parameters
+        start_date = args.get("start")
+        end_date = args.get("end")
         
-        result = await self._make_api_request("GET", url, headers, params=params)
-        return {"content": [{"type": "text", "text": json.dumps(result)}]}
-    
-    async def _update_user_settings(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Update user settings"""
-        user_id = args.get("user_id")
-        settings = args.get("settings")
-        user_token = args.get("token")
+        # Set default to year-to-date if no dates provided
+        if not start_date and not end_date:
+            current_year = datetime.now().year
+            start_date = f"{current_year}-01-01T00:00:00Z"
+            end_date = datetime.now().isoformat() + "Z"
+            logger.info(f"Using year-to-date default: {start_date} to {end_date}")
         
-        if not user_id or not settings:
-            return {"error": "user_id and settings are required"}
+        # Validate and format dates
+        try:
+            if start_date:
+                # Validate ISO format and ensure Z suffix for UTC
+                start_dt = datetime.fromisoformat(start_date.replace('Z', ''))
+                start_date = start_dt.isoformat()
+            
+            if end_date:
+                # Validate ISO format and ensure Z suffix for UTC
+                end_dt = datetime.fromisoformat(end_date.replace('Z', ''))
+                end_date = end_dt.isoformat()
+                
+            # Ensure start is before end
+            if start_date and end_date:
+                if start_dt >= end_dt:
+                    return {"error": "start date must be before end date"}
+                    
+        except ValueError as e:
+            return {"error": f"Invalid date format. Use ISO format (YYYY-MM-DDTHH:MM:SS): {str(e)}"}
         
-        url = f"{self.api_base_url}/users/{user_id}/settings"
-        headers = self._get_api_headers(user_token=user_token)
+        # Build URL with query parameters
+        url = f"{self.dch_api_url}/voyages/emissions"
         
-        result = await self._make_api_request("PUT", url, headers, json_data=settings)
+        # Build query parameters
+        params = {"asset_ids": ship_id}
         
+        if start_date:
+            params["start"] = start_date
+        if end_date:
+            params["end"] = end_date
+        
+        # Convert params to query string
+        query_params = "&".join([f"{k}={v}" for k, v in params.items()])
+        full_url = f"{url}?{query_params}"
+        
+        headers = self._get_dch_api_headers()
+        
+        logger.info(f"Fetching ship emissions from {full_url}")
+        logger.debug(f"Headers: {headers}")
+        logger.info(f"Time period: {start_date or 'N/A'} to {end_date or 'N/A'}")
+        
+        result = await self._make_api_request("GET", full_url, headers)
+        
+        # Add metadata about the query to the response
         if "error" not in result:
-            return {"content": [{"type": "text", "text": "Settings updated successfully"}]}
+            query_info = {
+                "ship_id": ship_id,
+                "time_period": {
+                    "start": start_date,
+                    "end": end_date,
+                    "is_year_to_date": not args.get("start") and not args.get("end")
+                },
+                "query_timestamp": datetime.now().isoformat() + "Z"
+            }
+            
+            # Wrap the result with query metadata
+            response_data = {
+                "query_info": query_info,
+                "emissions_data": result
+            }
+            
+            return {"content": [{"type": "text", "text": json.dumps(response_data, indent=2)}]}
         else:
             return {"content": [{"type": "text", "text": json.dumps(result)}]}
-    
-    async def _call_lambda_api(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Call Lambda API via API Gateway"""
-        endpoint = args.get("endpoint")
-        payload = args.get("payload", {})
-        user_token = args.get("token")
-        
-        if not endpoint:
-            return {"error": "endpoint is required"}
-        
-        url = f"{self.api_gateway_url}/{endpoint.lstrip('/')}"
-        headers = self._get_gateway_headers(user_token=user_token)
-        
-        result = await self._make_api_request("POST", url, headers, json_data=payload)
-        return {"content": [{"type": "text", "text": json.dumps(result)}]}
-    
-    async def _search_users(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Search users - admin only function using service token"""
-        query = args.get("query")
-        limit = args.get("limit", 10)
-        
-        if not query:
-            return {"error": "query is required"}
-        
-        url = f"{self.api_base_url}/admin/users/search"
-        headers = self._get_api_headers(use_service_token=True)  # Use service token for admin functions
-        params = {"q": query, "limit": limit}
-        
-        result = await self._make_api_request("GET", url, headers, params=params)
-        return {"content": [{"type": "text", "text": json.dumps(result)}]}
-    
-    async def read_resource(self, uri: str) -> Dict[str, Any]:
-        """Read resource from URI"""
-        if uri.startswith("webapp://current-state/"):
-            user_id = uri.split("/")[-1]
-            try:
-                url = f"{self.api_base_url}/users/{user_id}/current-state"
-                headers = self._get_api_headers(use_service_token=True)
-                
-                result = await self._make_api_request("GET", url, headers)
-                return {"content": json.dumps(result)}
-            except Exception as e:
-                logger.error(f"Error reading resource: {e}")
-                return {"content": json.dumps({"error": str(e)})}
-        
-        return {"content": json.dumps({"error": "Resource not found"})}
 
 # Initialize MCP server
 mcp_server = MCPServer()
